@@ -7,7 +7,28 @@ function load() {
   try { return Object.assign(structuredClone(EMPTY), JSON.parse(localStorage.getItem(KEY)) || {}); }
   catch { return structuredClone(EMPTY); }
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} }
+const COLLS = ['expenses', 'bills', 'events', 'workouts', 'meals', 'incomes', 'income', 'transfers'];
+let snap = null;
+function snapshot() { const m = {}; COLLS.forEach(c => (db[c] || []).forEach(r => { const { u, ...x } = r; m[c + ':' + r.id] = JSON.stringify(x); })); return m; }
+COLLS.forEach(c => (db[c] || []).forEach(r => { r.u ||= 1; }));
+snap = snapshot();
+function resetSnapshot() { snap = snapshot(); }
+/* Segna con l'ora di modifica (u) i record cambiati e registra le cancellazioni: serve alla sincronizzazione */
+function stamp() {
+  const now = Date.now(), cur = snapshot();
+  db.deleted ||= {};
+  if (snap) {
+    COLLS.forEach(c => (db[c] || []).forEach(r => { if (snap[c + ':' + r.id] !== cur[c + ':' + r.id]) r.u = now; }));
+    Object.keys(snap).forEach(k => { if (!(k in cur)) db.deleted[k.split(':')[1]] = now; });
+  } else COLLS.forEach(c => (db[c] || []).forEach(r => { r.u ||= now; }));
+  snap = cur;
+}
+function save(fromSync) {
+  stamp();
+  try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {}
+  if (!fromSync && window.syncSoon) window.syncSoon();
+}
+const hash = t => { let h = 5381; for (let i = 0; i < t.length; i++) h = (h * 33 ^ t.charCodeAt(i)) >>> 0; return h.toString(36); };
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 const CATS = [
@@ -113,8 +134,9 @@ const VIEWS = {
       ${card(ev.map(e => row({ ic: '📌', title: esc(e.title), sub: fmtDay(e.date) + (e.time ? ' · ' + e.time : ''), act: `data-edit="events:${e.id}"` })), 'Nessun impegno in arrivo')}
       <h2>Mangiato oggi</h2>
       ${card(meals.map(x => row({ ic: MEAL[x.meal].i, title: esc(x.desc), sub: MEAL[x.meal].n, val: x.kcal ? x.kcal + ' kcal' : '', act: `data-edit="meals:${x.id}"` })), 'Niente registrato oggi')}
+      ${window.syncCard ? syncCard() : ''}
       <h2>Backup</h2>
-      <div class="card"><div class="row"><div class="main"><div class="sub">I dati sono salvati su questo dispositivo. Fai un backup ogni tanto.</div></div></div>
+      <div class="card"><div class="row"><div class="main"><div class="sub">Copia di sicurezza di tutti i dati in un file.</div></div></div>
       <div class="row" style="gap:8px"><button class="btn" data-act="export">Esporta backup</button><button class="btn ghost" data-act="import">Importa</button><button class="btn ghost" data-act="csv">Spese in Excel</button></div></div>`;
   },
   soldi() {
@@ -312,7 +334,7 @@ function runAutoDebits() {
   db.bills.filter(b => b.auto && !b.done).forEach(b => {
     let guard = 0;
     while (!b.done && b.due <= t && guard++ < 60) {
-      if (b.amount) db.expenses.push({ id: uid(), amount: b.amount, date: b.due, cat: b.cat || 'bollette', note: b.name, method: b.method === 'contanti' ? 'contanti' : 'carta', auto: true, at: Date.now() });
+      if (b.amount) db.expenses.push({ id: `a-${b.id}-${b.due}`, amount: b.amount, date: b.due, cat: b.cat || 'bollette', note: b.name, method: b.method === 'contanti' ? 'contanti' : 'carta', auto: true, at: Date.now() });
       if (b.recur && b.recur !== 'none') b.due = addMonths(b.due, RECUR_M[b.recur]); else b.done = true;
       changed = true;
     }
@@ -320,7 +342,7 @@ function runAutoDebits() {
   db.incomes.filter(x => !x.done).forEach(x => {
     let guard = 0;
     while (!x.done && x.due <= t && guard++ < 60) {
-      db.income.push({ id: uid(), date: x.due, amount: x.amount, account: x.account, note: x.name, at: Date.now() });
+      db.income.push({ id: `i-${x.id}-${x.due}`, date: x.due, amount: x.amount, account: x.account, note: x.name, at: Date.now() });
       if (x.recur && x.recur !== 'none') x.due = addMonths(x.due, RECUR_M[x.recur]); else x.done = true;
       changed = true;
     }
@@ -413,17 +435,18 @@ async function importBank(file) {
   } else rows = parseCSV(await file.text());
   const moves = rowsToMovements(rows);
   const have = new Set(db.expenses.concat(db.transfers).map(e => e.src).filter(Boolean));
+  Object.keys(db.deleted || {}).forEach(id => have.add(id));
   const autos = db.expenses.filter(e => e.auto && !e.src);
   let dup = 0, cash = 0, income = 0, linked = 0;
   pendingImport = [];
   moves.forEach(m => {
     if (m.amount > 0) { income++; return; }
     const amount = Math.round(-m.amount * 100) / 100, src = `${m.date}|${amount}|${m.desc}`;
-    if (have.has(src)) { dup++; return; }
-    if (isCashWithdrawal(m.desc)) { cash++; db.transfers.push({ id: uid(), date: m.date, amount, from: 'banca', to: 'contanti', src, at: Date.now() }); have.add(src); return; }
+    if (have.has(src) || have.has('b-' + hash(src)) || have.has('t-' + hash(src))) { dup++; return; }
+    if (isCashWithdrawal(m.desc)) { cash++; db.transfers.push({ id: 't-' + hash(src), date: m.date, amount, from: 'banca', to: 'contanti', src, at: Date.now() }); have.add(src); return; }
     const a = autos.find(e => e.amount === amount && ym(e.date) === ym(m.date) && !e.src);
     if (a) { a.src = src; a.date = m.date; linked++; return; }
-    pendingImport.push({ id: uid(), date: m.date, amount, cat: guessCat(m.desc), note: shortDesc(m.desc) || 'Movimento banca', method: 'carta', src, bank: m.desc, at: Date.now() });
+    pendingImport.push({ id: 'b-' + hash(src), date: m.date, amount, cat: guessCat(m.desc), note: shortDesc(m.desc) || 'Movimento banca', method: 'carta', src, bank: m.desc, at: Date.now() });
   });
   save();
   showImport({ total: moves.length, dup, cash, income, linked });
