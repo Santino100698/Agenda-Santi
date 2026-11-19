@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Agenda">
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<title>Agenda Santi</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="top"><h1 id="title">Oggi</h1><button id="addBtn" aria-label="Aggiungi">+</button></header>
+<main id="view"></main>
+<nav id="tabs">
+  <button data-tab="home"><span>🏠</span>Home</button>
+  <button data-tab="soldi"><span>💶</span>Soldi</button>
+  <button data-tab="agenda"><span>📅</span>Agenda</button>
+  <button data-tab="sport"><span>🏃</span>Sport</button>
+  <button data-tab="cibo"><span>🍝</span>Cibo</button>
+</nav>
+<dialog id="sheet"><form method="dialog" id="sheetForm"></form></dialog>
+<script src="app.js"></script>
+</body>
+</html>
